@@ -4,8 +4,6 @@ on:
   workflow_dispatch: # 允许手动触发
   push: # 可选：代码推送时触发，可根据需要设置
     branches: [ master ]
-  pull_request: # 可选：PR时触发，可根据需要设置
-    branches: [ master ]
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
