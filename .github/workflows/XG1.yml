@@ -1,71 +1,64 @@
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# 这是免费软件，遵循MIT许可证。
-# 有关更多信息，请参阅/LICENSE文件。
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# 描述：使用GitHub Actions构建OpenWrt
-
-name: C-Life XG1
+name: Build OpenWrt
 
 on:
-  repository_dispatch:
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build'
+        required: false
+        default: 'false'
+      upload_wetransfer:
+        description: 'Upload to WeTransfer'
+        required: false
+        default: 'false'
+      upload_release:
+        description: 'Upload to GitHub Release'
+        required: false
+        default: 'false'
+  push:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日午夜自动构建
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
+  TZ: Asia/Shanghai
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: XG1.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_WETRANSFER: true
-  UPLOAD_GOFILE: false
-  UPLOAD_RELEASE: true
-  TZ: Asia/Shanghai
+  DEVICE_NAME: ${{ github.event.inputs.device_name || 'XG1' }}
+  FIRMWARE_DATE: ${{ format('{0}{1}{2}', format('{0:%Y}', fromUnixTime(env.ACTIONS_STEP_START)), format('{0:%m}', fromUnixTime(env.ACTIONS_STEP_START)), format('{0:%d}', fromUnixTime(env.ACTIONS_STEP_START))) }}
+  UPLOAD_WETRANSFER: ${{ github.event.inputs.upload_wetransfer || 'false' }}
+  UPLOAD_RELEASE: ${{ github.event.inputs.upload_release || 'false' }}
+  FIRMWARE: firmware
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build-openwrt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
 
     steps:
-    - name: 检出代码
+    - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-    - name: 初始化环境
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    - name: Set up environment
       run: |
-        # 移除不必要的 dotnet、Android 等 SDK，节省空间和时间
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo apt update -y
+        sudo apt full-upgrade -y
+        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+        bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext \
+        genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev \
+        libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
+        libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf \
+        python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion \
+        swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
 
-        # 更新并安装所有必需的软件包，合并为一条命令，确保包含 coolsnowwolf/lede 推荐的所有依赖
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install \
-          ack antlr3 asciidoc autoconf automake autopoint binutils bison \
-          build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler \
-          fastjar flex gawk gettext genisoimage git gcc-multilib g++-multilib gperf \
-          haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev \
-          libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
-          libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev \
-          libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full \
-          patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools \
-          qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
-          upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-
-        # 自动清理和清除apt缓存
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-
-        # 设置时区
-        sudo timedatectl set-timezone "$TZ"
-
-    - name: 克隆源代码
+    - name: Clone OpenWrt source
       run: |
-        df -hT $GITHUB_WORKSPACE
-        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+        git clone https://github.com/coolsnowwolf/lede openwrt
+        cd openwrt
 
     - name: 加载自定义源
       run: |
@@ -76,11 +69,11 @@ jobs:
           $GITHUB_WORKSPACE/$DIY_P1_SH
         fi
 
-    - name: 更新软件源
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: 安装软件包
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: Update and install feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: 加载自定义配置
       run: |
@@ -92,78 +85,113 @@ jobs:
           $GITHUB_WORKSPACE/$DIY_P2_SH
         fi
 
-    - name: 下载依赖包
-      id: package
+    - name: Configure OpenWrt
       run: |
         cd openwrt
-        make defconfig
-        # 使用多线程下载，与 coolsnowwolf/lede 指南一致
-        make download -j$(nproc)
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        if [ ! -f .config ]; then
+          make defconfig
+        else
+          make defconfig
+        fi
 
-    - name: 编译固件
-      id: compile
-      run: |
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        # 编译命令与 coolsnowwolf/lede 指南的精神一致（先尝试多线程，失败则降级）
-        make -j$(nproc) || make -j$(($(nproc)/2)) || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FIRMWARE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-    - name: 检查磁盘空间
-      if: always()
-      run: df -hT
-
-    - name: 上传编译目录
-      uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+    - name: Cache dependencies
+      uses: actions/cache@v3
       with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FIRMWARE_DATE }}
-        path: openwrt/bin
+        path: |
+          openwrt/dl
+          openwrt/ccache
+        key: ${{ runner.os }}-openwrt-${{ hashFiles('openwrt/feeds.conf.default') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-
+
+    - name: Download sources
+      run: |
+        cd openwrt
+        make download -j$(nproc)
+        # 检查是否下载完整
+        make download -j$(nproc) || make download -j$(nproc) V=s
+
+    - name: Build OpenWrt
+      run: |
+        cd openwrt
+        make -j$(($(nproc) + 1)) V=s
 
     - name: 整理固件文件
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
       run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+        mkdir -p $FIRMWARE
+        # 复制所有固件文件到 firmware 目录
+        find openwrt/bin/targets -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" | xargs -I {} cp {} $FIRMWARE/ || true
+        
+        # 检查是否有固件文件生成
+        if [ $(ls -1 $FIRMWARE/ 2>/dev/null | wc -l) -eq 0 ]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "没有找到固件文件，编译可能失败"
+          exit 1
+        else
+          echo "找到的固件文件:"
+          ls -la $FIRMWARE/
+          echo "status=success" >> $GITHUB_OUTPUT
+        fi
 
     - name: 上传固件目录
       uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success'
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FIRMWARE_DATE }}
+        name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FIRMWARE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: 上传固件到WeTransfer
       id: wetransfer
       if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
       run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
-        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
-        echo "wetransfer_url=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
+        # 安装 curl 如果尚未安装
+        sudo apt install -y curl
+        # 下载 file-transfer 工具
+        curl -fsSL https://git.io/file-transfer | sh
+        # 上传到 WeTransfer
+        ./transfer wet -s -p 16 --no-progress $FIRMWARE/* 2>&1 | tee wetransfer.log
+        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https || echo 'No WeTransfer URL found')"
+        # 提取 WeTransfer URL
+        WETRANSFER_URL=$(cat wetransfer.log | grep "https://we.tl" | tail -1 | awk '{print $3}' || echo '')
+        if [ -n "$WETRANSFER_URL" ]; then
+          echo "wetransfer_url=$WETRANSFER_URL" >> $GITHUB_OUTPUT
+        else
+          echo "wetransfer_url=" >> $GITHUB_OUTPUT
+        fi
 
     - name: 生成发布标签
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success'
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "OpenWrt Firmware for C-Life XG1" > release.txt
+        RELEASE_TAG=$(date +"%Y.%m.%d-%H%M")
+        echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+        
+        # 创建发布说明文件
+        echo "OpenWrt Firmware for ${{ env.DEVICE_NAME }}" > release.txt
         echo "" >> release.txt
         echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
-        [ -n "${{ env.DEVICE_NAME }}" ] && echo "Device: ${{ env.DEVICE_NAME }}" >> release.txt
-        [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ] && echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
+        echo "Device: ${{ env.DEVICE_NAME }}" >> release.txt
+        echo "GitHub Workflow: ${{ github.workflow }}" >> release.txt
+        echo "GitHub Run ID: ${{ github.run_id }}" >> release.txt
+        echo "" >> release.txt
+        echo "### Included Files:" >> release.txt
+        ls -1 $FIRMWARE/ | while read file; do
+          echo "- $file" >> release.txt
+        done
+        echo "" >> release.txt
+        
+        # 添加 WeTransfer 链接（如果存在）
+        if [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ]; then
+          echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
+          echo "" >> release.txt
+        fi
+        
+        echo "Source Code: https://github.com/coolsnowwolf/lede" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 上传固件到发布版
-      uses: softprops/action-gh-release@v2 # Updated to v2 [1, 2]
+      uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -172,24 +200,9 @@ jobs:
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-  cleanup:
-    runs-on: ubuntu-22.04
-    needs: build
-    if: always()
-    steps:
-    - name: 删除旧工作流运行
-      uses: Mattraks/delete-workflow-runs@v2.0.1
-      with:
-        retain_days: 1
-        keep_minimum_runs: 2
-
-    - name: 移除旧发布版
-      # Replaced dev-drprasad/delete-older-releases with geekyeggo/delete-releases@v5 as a well-maintained alternative.
-      # User should verify if this action meets their specific requirements.
-      uses: geekyeggo/delete-releases@v5 
-      if: needs.build.result == 'success' && env.UPLOAD_RELEASE == 'true'
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: 列出所有固件文件
+      if: always()
+      run: |
+        echo "最终生成的固件文件:"
+        ls -la $FIRMWARE/ 2>/dev/null || echo "没有找到固件文件"
+        echo "工作流状态: ${{ job.status }}"
