@@ -22,7 +22,7 @@ sed -i "s/OpenWrt /0012h build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" packag
 sed -i ' s/luci-theme-bootstrap/luci-theme-argon/g ' feeds/luci/collections/luci/Makefile
 
 # 6.设置ttyd免登录
-# sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
+sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
 
 # 7.修正连接数（by ベ七秒鱼ベ）
 sed -i '/customized in this file/a net.netfilter.nf_conntrack_max=165535' package/base-files/files/etc/sysctl.conf
