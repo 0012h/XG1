@@ -1,3 +1,11 @@
+# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
+#
+# 这是免费软件，遵循MIT许可证。
+# 有关更多信息，请参阅/LICENSE文件。
+#
+# https://github.com/P3TERX/Actions-OpenWrt
+# 描述：使用GitHub Actions构建OpenWrt
+
 name: C-Life XG1
 
 on:
@@ -30,22 +38,34 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # 移除不必要的 dotnet、Android 等 SDK，节省空间和时间
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
+
+        # 更新并安装所有必需的软件包，合并为一条命令，确保包含 coolsnowwolf/lede 推荐的所有依赖
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        sudo -E apt-get -qq install \
+          ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+          build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler \
+          fastjar flex gawk gettext genisoimage git gcc-multilib g++-multilib gperf \
+          haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev \
+          libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+          libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev \
+          libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full \
+          patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools \
+          qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+          upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+
+        # 自动清理和清除apt缓存
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
+
+        # 设置时区
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
 
     - name: 克隆源代码
-      working-directory: /workdir
       run: |
-        df -hT $PWD
+        df -hT $GITHUB_WORKSPACE
         git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: 加载自定义源
       run: |
@@ -77,6 +97,7 @@ jobs:
       run: |
         cd openwrt
         make defconfig
+        # 使用多线程下载，与 coolsnowwolf/lede 指南一致
         make download -j$(nproc)
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -86,11 +107,12 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
+        # 编译命令与 coolsnowwolf/lede 指南的精神一致（先尝试多线程，失败则降级）
         make -j$(nproc) || make -j$(($(nproc)/2)) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "FIRMWARE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: 检查磁盘空间
       if: always()
@@ -119,25 +141,20 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FIRMWARE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: 上传固件到WeTransfer
-      id: wetransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
-        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
-        echo "::set-output name=url::$(cat wetransfer.log | grep https | cut -f3 -d" ")"
-
     - name: 生成发布标签
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success'
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
+        echo "OpenWrt Firmware for C-Life XG1" > release.txt
+        echo "" >> release.txt
+        echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
+        [ -n "${{ env.DEVICE_NAME }}" ] && echo "Device: ${{ env.DEVICE_NAME }}" >> release.txt
+        [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ] && echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 上传固件到发布版
-      uses: softprops/action-gh-release@v0.1.15
+      uses: softprops/action-gh-release@v1.1.4
       if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -145,6 +162,15 @@ jobs:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
+        
+    - name: 上传固件到WeTransfer
+      id: wetransfer
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
+        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+        echo "wetransfer_url=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
 
   cleanup:
     runs-on: ubuntu-22.04
