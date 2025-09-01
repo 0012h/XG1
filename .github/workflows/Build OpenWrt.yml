@@ -3,98 +3,51 @@ name: Build OpenWrt
 on:
   workflow_dispatch: # 允许手动触发
 
-env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
-  CONFIG_FILE: XG1.config # 你的配置文件路径
-  DIY_P1_SH: diy-part1.sh # 你的第一部分DIY脚本
-  DIY_P2_SH: diy-part2.sh # 你的第二部分DIY脚本
-  FEEDS_CONF: feeds.conf.default # 可选：自定义feeds配置文件
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+
     steps:
-      - name: Checkout repository code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@master
 
-      - name: Clone OpenWrt source code
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          git clone -b $REPO_BRANCH $REPO_URL openwrt
-
-      - name: Load custom feeds and run DIY script part 1
+          sudo -E apt-get -yqq update
+          sudo -E apt-get -yqq install build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get clean
+      - name: Download lede
         run: |
-          [ -e $FEEDS_CONF ] && cp $FEEDS_CONF openwrt/feeds.conf.default
-          if [ -f $DIY_P1_SH ]; then
-            chmod +x $DIY_P1_SH
-            cd openwrt
-            ../$DIY_P1_SH
-          fi
-
-      - name: Update and install feeds
+          git clone https://github.com/coolsnowwolf/lede
+          cp XG1.config ./lede/.config
+          mv ./lede/* ./
+      - name: Install passwall
         run: |
-          cd openwrt
+          echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
+          echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
+      - name: Update feeds
+        run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-
-      - name: Load custom configuration and run DIY script part 2
+      - name: Costom configure file
         run: |
-          [ -e files ] && cp -r files openwrt/files
-          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
-          if [ -f $DIY_P2_SH ]; then
-            chmod +x $DIY_P2_SH
-            cd openwrt
-            ../$DIY_P2_SH
-          fi
-
-      - name: Download dependencies and build firmware
-        run: |
-          cd openwrt
           make defconfig
-          make download -j$(nproc)
-          make V=s -j$(($(nproc) + 1))
-
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenWrt_Firmware
-          path: openwrt/bin/targets/ # OpenWrt 固件通常在此目录下，你可以根据实际情况调整
-
-  release:
-    needs: build # 确保在 build job 完成后才运行 release job
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # 授予写入 release 的权限
-    steps:
-      - name: Checkout repository code
-        uses: actions/checkout@v4
-
-      - name: Download firmware artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: OpenWrt_Firmware # 对应 build job 中上传的 artifact name
-          path: ./firmware # 下载到当前目录下的 firmware 文件夹
-
-      - name: Organize firmware files for release
+      - name: Download package source code
         run: |
-          mkdir -p release_files
-          find ./firmware -type f -regex ".*\.bin\|.*\.img\|.*\.ipk" -exec mv {} release_files/ \;
-
-      - name: Get current date for release tag
-        id: date
-        run: echo "RELEASE_DATE=$(date +'%Y.%m.%d-%H%M')" >> "$GITHUB_OUTPUT"
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+      - name: Compile firmware
+        run: |
+          echo -e "$(nproc) thread build."
+          make -j$(nproc) V=s
+      - name : Upload artifact
+        uses: actions/upload-artifact@master
         with:
-          tag_name: OpenWrt-${{ steps.date.outputs.RELEASE_DATE }} # 使用日期作为 Release Tag
-          name: OpenWrt Firmware Build ${{ steps.date.outputs.RELEASE_DATE }}
-          body: |
-            This release contains the OpenWrt firmware built on ${{ steps.date.outputs.RELEASE_DATE }}.
-            - Based on Coolsnowwolf's LEDE.
-            - Using configuration: ${{ env.CONFIG_FILE }}
-            - Custom scripts: ${{ env.DIY_P1_SH }}, ${{ env.DIY_P2_SH }}
-          files: |
-            ./release_files/* # 上传所有整理好的固件文件
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动提供的 token
+          name: OpenWrt_firmware
+          path: bin/targets/
+          
