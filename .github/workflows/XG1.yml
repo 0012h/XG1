@@ -1,4 +1,3 @@
-#
 # https://github.com/P3TERX/Actions-OpenWrt
 #
 # File: .github/workflows/openwrt-bulder.yml
@@ -153,8 +152,8 @@ jobs:
         keep_minimum_runs: 2
 
     - name: 移除旧发布版
-      uses: geekyeggo/delete-releases@v5 
-      if: needs.build.result == 'success' && env.UPLOAD_RELEASE == 'true'
+      uses: dev-drprasad/delete-older-releases@master
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
         keep_latest: 3
         delete_tags: true
