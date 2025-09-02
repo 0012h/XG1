@@ -26,3 +26,6 @@ sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
 
 # 7.修正连接数（by ベ七秒鱼ベ）
 sed -i '/customized in this file/a net.netfilter.nf_conntrack_max=165535' package/base-files/files/etc/sysctl.conf
+
+# 8.修改dnsmasq配置
+sed -i 's/dnsmasq /dnsmasq-full /' include/target.mk
