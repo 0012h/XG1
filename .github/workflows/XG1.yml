@@ -10,7 +10,7 @@
 # See /LICENSE for more information.
 #
 
-name: C-Life XG1 编译流程
+name: C-Life XG1
 
 on:
   workflow_dispatch:
