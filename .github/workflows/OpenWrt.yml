@@ -2,6 +2,7 @@
 # This is free software, lisence use MIT.
 # 
 # Copyright (C) 2019 P3TERX <https://p3terx.com>
+# 
 # Copyright (C) 2020 KFERMercer <KFER.Mercer@gmail.com>
 # 
 # <https://github.com/KFERMercer/OpenWrt-CI>
@@ -11,6 +12,21 @@ name: OpenWrt
 
 on:
   workflow_dispatch:
+    inputs:
+      use_custom_config:
+        description: '使用自定义.config文件'
+        required: false
+        default: false
+        type: boolean
+      custom_hostname:
+        description: '自定义主机名'
+        required: false
+        default: 'NX30Pro'
+        type: string
+
+env:
+  USE_CUSTOM_CONFIG: ${{ github.event.inputs.use_custom_config }}
+  CUSTOM_HOSTNAME: ${{ github.event.inputs.custom_hostname }}
 
 jobs:
   build:
@@ -29,46 +45,60 @@ jobs:
           sudo -E apt-get -yqq install build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get clean
+          
       - name: 克隆源代码
         run: |
           git clone https://github.com/coolsnowwolf/lede
-          cp .config ./lede/.config
+          if [[ "${{ env.USE_CUSTOM_CONFIG }}" == "true" && -f ".config" ]]; then
+            echo "使用自定义.config文件"
+            cp .config ./lede/.config
+          else
+            echo "使用默认配置"
+          fi
           mv ./lede/* ./
+          
       - name: 加载自定义源
         run: |
           # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
           # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
+          
       - name: 更新软件源
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          
       - name: 加载配置
         run: |
           cat > /tmp/inline_script.sh << 'EOF'
           # 1.修改默认ip
           sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-          # 2.修改主机名
-          sed -i 's/OpenWrt/NX30Pro/g' package/base-files/files/bin/config_generate
-          # 4.修改版本号
+          # 2.修改主机名（可选）
+          if [[ -n "$CUSTOM_HOSTNAME" && "$CUSTOM_HOSTNAME" != "OpenWrt" ]]; then
+            sed -i "s/OpenWrt/$CUSTOM_HOSTNAME/g" package/base-files/files/bin/config_generate
+          fi
+          # 3.修改版本号
           sed -i "s/OpenWrt /0012h build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" package/lean/default-settings/files/zzz-default-settings
-          # 5.修改默认主题
+          # 4.修改默认主题
           sed -i ' s/luci-theme-bootstrap/luci-theme-argon/g ' feeds/luci/collections/luci/Makefile
-          # 6.设置ttyd免登录
+          # 5.设置ttyd免登录
           # sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
           EOF
           # 执行嵌入的脚本
-          bash /tmp/inline_script.sh
+          CUSTOM_HOSTNAME="${{ env.CUSTOM_HOSTNAME }}" bash /tmp/inline_script.sh
           rm -f /tmp/inline_script.sh
           make defconfig
+          
       - name: 下载依赖包
         run: |
           make download -j8
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
+          
       - name: 编译固件
         run: |
           echo -e "$(nproc) thread build."
           make -j$(nproc) V=s
+          
       - name : 上传编译目录
         uses: actions/upload-artifact@master
         with:
@@ -82,7 +112,8 @@ jobs:
           echo "OpenWrt Firmware for C-Life XG1" > release.txt
           echo "" >> release.txt
           echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
-          [ -n "${{ env.DEVICE_NAME }}" ] && echo "Device: ${{ env.DEVICE_NAME }}" >> release.txt
+          echo "Custom Hostname: ${{ env.CUSTOM_HOSTNAME }}" >> release.txt
+          echo "Use Custom Config: ${{ env.USE_CUSTOM_CONFIG }}" >> release.txt
           [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ] && echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -93,7 +124,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          files: ${{ env.FIRMWARE }}/*
+          files: bin/targets/*
           
       - name: 删除旧工作流运行
         uses: Mattraks/delete-workflow-runs@v2.0.1
@@ -103,10 +134,8 @@ jobs:
 
       - name: 移除旧发布版
         uses: dev-drprasad/delete-older-releases@master
-        if: env.UPLOAD_RELEASE == 'true' && !cancelled()
         with:
           keep_latest: 3
           delete_tags: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
