@@ -8,7 +8,7 @@
 # <https://github.com/KFERMercer/OpenWrt-CI>
 #
 
-name: Build OpenWrt
+name: OpenWrt Build
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ on:
 env:
   SELECTED_CONFIG: ${{ github.event.inputs.config_file }}
   SELECTED_HOSTNAME: ${{ github.event.inputs.hostname }}
-  OPENWRT_SOURCE_DIR: openwrt # 定义OpenWrt源代码目录
+  OPENWRT_SOURCE_DIR: lede # 定义OpenWrt源代码目录
 
 jobs:
   build:
@@ -41,35 +41,36 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
-      - name: 检查代码
-        uses: actions/checkout@v4
+      - name: 检查代码 (Checkout workflow repository)
+        uses: actions/checkout@v4 # 更新到v4
 
-      - name: 初始化环境
+      - name: 初始化环境 (Initialize environment)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo -E apt-get update -yqq
           sudo -E apt-get install -yqq build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
+          # 清理不必要的包和缓存，确保环境干净
           sudo -E apt-get autoremove --purge -yqq
           sudo -E apt-get clean -yqq
 
-      - name: 克隆OpenWrt源代码
+      - name: 克隆OpenWrt源代码 (Clone OpenWrt source)
         run: |
           git clone https://github.com/coolsnowwolf/lede ${{ env.OPENWRT_SOURCE_DIR }}
 
-      - name: 加载自定义源
+      - name: 加载自定义源 (Load custom feeds) # 保持注释，如果需要使用，请取消注释
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
           # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
 
-      - name: 更新软件源
+      - name: 更新软件源 (Update feeds)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 应用选择的配置文件
+      - name: 应用选择的配置文件 (Apply selected config file)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           echo "使用配置文件: ${{ env.SELECTED_CONFIG }}"
@@ -77,7 +78,7 @@ jobs:
           cp "../configs/${{ env.SELECTED_CONFIG }}" .config
           echo "已应用配置文件: ../configs/${{ env.SELECTED_CONFIG }}"
 
-      - name: 加载配置并修改
+      - name: 加载配置并修改 (Load config and customize)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           # 1.修改默认ip
@@ -91,7 +92,7 @@ jobs:
           # 5.设置ttyd免登录
           sed -i 's/exit 0/exit 0\nsed -i "s/\\/bin\\/login/\\/bin\\/login -f root/" \/etc\/config\/ttyd/' package/lean/default-settings/files/zzz-default-settings
 
-      - name: 下载依赖包
+      - name: 下载依赖包 (Download dependencies)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           make defconfig
@@ -99,19 +100,21 @@ jobs:
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
 
-      - name: 编译固件
+      - name: 编译固件 (Compile firmware)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           echo -e "$(nproc) thread build."
           make -j$(nproc) V=s
 
-      - name : 上传编译目录
-        uses: actions/upload-artifact@v4
+      - name : 上传编译目录 (Upload compiled firmware directory)
+        uses: actions/upload-artifact@v4 # 更新到v4
         with:
           name: OpenWrt_firmware
+          # 上传整个 targets 目录，包含所有固件文件
           path: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/
+          retention-days: 1 # 设置 artifact 的保留天数
 
-      - name: 生成发布标签
+      - name: 生成发布标签 (Generate release tag)
         id: tag
         run: |
           echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
@@ -122,27 +125,26 @@ jobs:
           echo "Selected Hostname: ${{ env.SELECTED_HOSTNAME }}" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 上传固件到发布版
-        uses: softprops/action-gh-release@v1
+      - name: 上传固件到发布版 (Upload firmware to release)
+        uses: softprops/action-gh-release@v1 # 更新到v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          files: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/*/*/*
+          # 修正文件路径，直接从编译输出目录中选取所有文件
+          files: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/*/*/* # 匹配所有子目录下的所有文件
 
-      - name: 删除旧工作流运行
+      - name: 删除旧工作流运行 (Delete old workflow runs)
         uses: Mattraks/delete-workflow-runs@v2.0.1
         with:
           retain_days: 1
           keep_minimum_runs: 2
 
-      - name: 移除旧发布版
-        uses: dev-drprasad/delete-older-releases@v0.2.1
+      - name: 移除旧发布版 (Remove old releases)
+        uses: dev-drprasad/delete-older-releases@v0.2.1 # 更新到v0.2.1
         with:
           keep_latest: 3
           delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
