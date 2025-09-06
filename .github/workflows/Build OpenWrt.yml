@@ -1,14 +1,14 @@
 #
 # This is free software, lisence use MIT.
-# 
+#
 # Copyright (C) 2019 P3TERX <https://p3terx.com>
-# 
+#
 # Copyright (C) 2020 KFERMercer <KFER.Mercer@gmail.com>
-# 
+#
 # <https://github.com/KFERMercer/OpenWrt-CI>
 #
 
-name: OpenWrt
+name: Build OpenWrt
 
 on:
   workflow_dispatch:
@@ -33,6 +33,7 @@ on:
 env:
   SELECTED_CONFIG: ${{ github.event.inputs.config_file }}
   SELECTED_HOSTNAME: ${{ github.event.inputs.hostname }}
+  OPENWRT_SOURCE_DIR: openwrt # 定义OpenWrt源代码目录
 
 jobs:
   build:
@@ -41,47 +42,43 @@ jobs:
 
     steps:
       - name: 检查代码
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
 
       - name: 初始化环境
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -yqq update
-          sudo -E apt-get -yqq install build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
-          sudo -E apt-get -y autoremove --purge
-          sudo -E apt-get clean
-          
-      - name: 克隆源代码
+          sudo -E apt-get update -yqq
+          sudo -E apt-get install -yqq build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
+          sudo -E apt-get autoremove --purge -yqq
+          sudo -E apt-get clean -yqq
+
+      - name: 克隆OpenWrt源代码
         run: |
-          git clone https://github.com/coolsnowwolf/lede
-          mv ./lede/* ./
-          
+          git clone https://github.com/coolsnowwolf/lede ${{ env.OPENWRT_SOURCE_DIR }}
+
       - name: 加载自定义源
+        working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
           # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
-          
+
       - name: 更新软件源
+        working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          
+
       - name: 应用选择的配置文件
+        working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
-          if [[ "${{ env.SELECTED_CONFIG }}" != "默认配置" ]]; then
-            echo "使用配置文件: ${{ env.SELECTED_CONFIG }}"
-            if [[ -f "configs/${{ env.SELECTED_CONFIG }}" ]]; then
-              cp "configs/${{ env.SELECTED_CONFIG }}" .config
-              echo "已应用配置文件: configs/${{ env.SELECTED_CONFIG }}"
-            else
-              echo "警告: 配置文件 configs/${{ env.SELECTED_CONFIG }} 不存在，使用默认配置"
-            fi
-          else
-            echo "使用默认配置"
-          fi
-          
-      - name: 加载配置
+          echo "使用配置文件: ${{ env.SELECTED_CONFIG }}"
+          # 将配置文件从 'configs/' 目录复制到 OpenWrt 根目录
+          cp "../configs/${{ env.SELECTED_CONFIG }}" .config
+          echo "已应用配置文件: ../configs/${{ env.SELECTED_CONFIG }}"
+
+      - name: 加载配置并修改
+        working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           # 1.修改默认ip
           sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
@@ -95,25 +92,24 @@ jobs:
           sed -i 's/exit 0/exit 0\nsed -i "s/\\/bin\\/login/\\/bin\\/login -f root/" \/etc\/config\/ttyd/' package/lean/default-settings/files/zzz-default-settings
 
       - name: 下载依赖包
+        working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           make defconfig
-          make download -j8
+          make download -j$(nproc) # 使用所有核心下载依赖
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
-          
+
       - name: 编译固件
+        working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           echo -e "$(nproc) thread build."
           make -j$(nproc) V=s
-          
+
       - name : 上传编译目录
-        uses: actions/upload-artifact@master
-        run: |
-          cd lede/bin/targets/*/*
-          rm -rf packages
+        uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_firmware
-          path: bin/targets/
+          path: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/
 
       - name: 生成发布标签
         id: tag
@@ -124,18 +120,17 @@ jobs:
           echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
           echo "Selected Config: ${{ env.SELECTED_CONFIG }}" >> release.txt
           echo "Selected Hostname: ${{ env.SELECTED_HOSTNAME }}" >> release.txt
-          [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ] && echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: 上传固件到发布版
-        uses: softprops/action-gh-release@master
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          files: ${{ env.FIRMWARE }}/*
-          
+          files: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/*/*/*
+
       - name: 删除旧工作流运行
         uses: Mattraks/delete-workflow-runs@v2.0.1
         with:
@@ -143,9 +138,11 @@ jobs:
           keep_minimum_runs: 2
 
       - name: 移除旧发布版
-        uses: dev-drprasad/delete-older-releases@master
+        uses: dev-drprasad/delete-older-releases@v0.2.1
         with:
           keep_latest: 3
           delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
