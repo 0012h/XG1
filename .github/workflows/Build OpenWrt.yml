@@ -147,23 +147,6 @@ jobs:
             ${{ env.FIRMWARE_DIR }}/**/*.img
             ${{ env.FIRMWARE_DIR }}/**/*.gz
 
-      - name: 上传到WeTransfer
-        run: |
-          # 安装 transfer 工具
-          curl -fsSL git.io/file-transfer | sh
-          
-          # 上传所有固件文件
-          ./transfer wet -s -p 16 --no-progress ${{ env.FIRMWARE_DIR }} 2>&1 | tee wetransfer.log
-          
-          # 提取并输出 URL
-          wet_url=$(grep "https://we.tl/" wetransfer.log | tail -1 | awk '{print $3}')
-          if [ -n "$wet_url" ]; then
-            echo "::notice title=WeTransfer URL::Download URL: $wet_url"
-            echo "url=$wet_url" >> $GITHUB_OUTPUT
-          else
-            echo "::warning::WeTransfer upload may have failed"
-          fi
-
       - name: 删除旧工作流运行 (Delete old workflow runs)
         uses: Mattraks/delete-workflow-runs@v2.0.1
         with:
