@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       config_file:
-        description: '选择.config配置文件'
+        description: '选择配置文件'
         required: true
         default: 'H3C.config'
         type: choice
