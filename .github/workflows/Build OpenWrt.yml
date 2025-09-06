@@ -33,13 +33,16 @@ on:
 env:
   SELECTED_CONFIG: ${{ github.event.inputs.config_file }}
   SELECTED_HOSTNAME: ${{ github.event.inputs.hostname }}
-  OPENWRT_SOURCE_DIR: lede
-  FIRMWARE_DIR: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets
+  OPENWRT_SOURCE_DIR: lede # 定义OpenWrt源代码目录
+  # 定义编译产物目录，使用绝对路径更保险，以便在不同步骤中引用
+  FIRMWARE_BUILD_DIR: ${{ github.workspace }}/lede/bin/targets/ 
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
+    permissions:
+      contents: write # 授予写入权限以创建发布，解决403错误
 
     steps:
       - name: 检查代码 (Checkout workflow repository)
@@ -51,6 +54,7 @@ jobs:
         run: |
           sudo -E apt-get update -yqq
           sudo -E apt-get install -yqq build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
+          # 清理不必要的包和缓存，确保环境干净
           sudo -E apt-get autoremove --purge -yqq
           sudo -E apt-get clean -yqq
 
@@ -58,7 +62,7 @@ jobs:
         run: |
           git clone https://github.com/coolsnowwolf/lede ${{ env.OPENWRT_SOURCE_DIR }}
 
-      - name: 加载自定义源 (Load custom feeds)
+      - name: 加载自定义源 (Load custom feeds) # 保持注释，如果需要使用，请取消注释
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
@@ -74,23 +78,32 @@ jobs:
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           echo "使用配置文件: ${{ env.SELECTED_CONFIG }}"
-          cp "../configs/${{ env.SELECTED_CONFIG }}" .config
-          echo "已应用配置文件: ../configs/${{ env.SELECTED_CONFIG }}"
+          # 将配置文件从 'configs/' 目录复制到 OpenWrt 根目录
+          # 使用 github.workspace 确保路径正确
+          cp "${{ github.workspace }}/configs/${{ env.SELECTED_CONFIG }}" .config
+          echo "已应用配置文件: ${{ github.workspace }}/configs/${{ env.SELECTED_CONFIG }}"
 
       - name: 加载配置并修改 (Load config and customize)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
+          # 1.修改默认ip - 使用 '#' 作为分隔符
           sed -i 's#192.168.1.1#192.168.2.1#g' package/base-files/files/bin/config_generate
+          # 2.修改主机名 - 使用 '#' 作为分隔符，并确保变量正确引用
           sed -i "s#OpenWrt#${{ env.SELECTED_HOSTNAME }}#g" package/base-files/files/bin/config_generate
+          # 3.修改版本号 - 使用 '#' 作为分隔符
           sed -i "s#OpenWrt #0012h build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt #g" package/lean/default-settings/files/zzz-default-settings
+          # 4.修改默认主题 - 使用 '#' 作为分隔符
           sed -i 's#luci-theme-bootstrap#luci-theme-argon#g' feeds/luci/collections/luci/Makefile
+          # 5.设置ttyd免登录
+          # 这是一个包含嵌套 sed 命令的复杂替换。
+          # 外部 sed 使用 '#' 作为分隔符，内部 sed 使用 '|' 作为分隔符，并移除不必要的转义。
           sed -i 's#exit 0#exit 0\nsed -i "s|/bin/login|/bin/login -f root|" /etc/config/ttyd#' package/lean/default-settings/files/zzz-default-settings
 
       - name: 下载依赖包 (Download dependencies)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
           make defconfig
-          make download -j$(nproc)
+          make download -j$(nproc) # 使用所有核心下载依赖
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
 
@@ -100,52 +113,54 @@ jobs:
           echo -e "$(nproc) thread build."
           make -j$(nproc) V=s
 
-      - name: 清理编译目录 (Clean up packages directory)
+      - name: 删除编译目录中的packages文件夹 (Delete packages folder in compile directory)
         working-directory: ${{ env.OPENWRT_SOURCE_DIR }}
         run: |
-          # 删除 packages 目录以节省空间
-          rm -rf bin/packages
-          echo "已删除 packages 目录"
+          # 查找并删除bin/targets/下所有架构目录中的packages文件夹
+          # 例如: bin/targets/x86/64/packages/
+          echo "正在查找并删除 'bin/targets/**/packages' 目录..."
+          find ${{ env.FIRMWARE_BUILD_DIR }} -type d -name "packages" -exec rm -rf {} +
+          echo "已删除所有 'bin/targets/**/packages' 目录。"
 
-      - name: 上传编译目录 (Upload compiled firmware directory)
+      - name : 上传编译目录 (Upload compiled firmware directory)
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_firmware
-          path: ${{ env.FIRMWARE_DIR }}/
+          # 上传整个 targets 目录，包含所有固件文件
+          path: ${{ env.FIRMWARE_BUILD_DIR }}
 
-      - name: 生成发布标签和固件列表 (Generate release tag and firmware list)
-        id: release_info
+      - name: 生成发布标签 (Generate release tag)
+        id: tag
         run: |
-          # 生成发布标签
-          release_tag=$(date +"%Y.%m.%d-%H%M")
-          echo "release_tag=$release_tag" >> $GITHUB_OUTPUT
-          
-          # 创建发布说明文件
-          echo "OpenWrt Firmware" > release.md
-          echo "" >> release.md
-          echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.md
-          echo "Selected Config: ${{ env.SELECTED_CONFIG }}" >> release.md
-          echo "Selected Hostname: ${{ env.SELECTED_HOSTNAME }}" >> release.md
-          echo "" >> release.md
-          echo "## Firmware Files" >> release.md
-          
-          # 查找并列出所有固件文件
-          find ${{ env.FIRMWARE_DIR }} -name "*.bin" -o -name "*.img" -o -name "*.gz" | while read file; do
-            echo "- $(basename "$file")" >> release.md
-          done
+          echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          echo "OpenWrt Firmware" > release.txt
+          echo "" >> release.txt
+          echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
+          echo "Selected Config: ${{ env.SELECTED_CONFIG }}" >> release.txt
+          echo "Selected Hostname: ${{ env.SELECTED_HOSTNAME }}" >> release.txt
+          echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 创建发布版 (Create release)
-        uses: softprops/action-gh-release@v1
+      - name: 上传固件到发布版 (Upload firmware to release)
+        uses: softprops/action-gh-release@v1 # 更改为v1版本以提高稳定性
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.release_info.outputs.release_tag }}
-          name: OpenWrt Build ${{ steps.release_info.outputs.release_tag }}
-          body_path: release.md
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          # 使用更具体的glob模式来匹配OpenWrt固件文件，包括一些常用的文件类型和编译信息
           files: |
-            ${{ env.FIRMWARE_DIR }}/**/*.bin
-            ${{ env.FIRMWARE_DIR }}/**/*.img
-            ${{ env.FIRMWARE_DIR }}/**/*.gz
+            ${{ env.FIRMWARE_BUILD_DIR }}/**/openwrt-*.{bin,img,iso,elf,squashfs,ext4,ubi,itb}
+            ${{ env.FIRMWARE_BUILD_DIR }}/**/config.buildinfo
+            ${{ env.FIRMWARE_BUILD_DIR }}/**/sha256sums
+
+      - name: 上传到WeTransfer
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          # 使用定义的固件构建目录变量
+          ./transfer wet -s -p 16 --no-progress ${{ env.FIRMWARE_BUILD_DIR }} 2>&1 | tee wetransfer.log
+          echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+          # 使用 $GITHUB_OUTPUT 语法设置输出变量，并确保获取到正确的URL
+          echo "wetransfer_url=$(cat wetransfer.log | grep https | awk '{print $NF}')" >> $GITHUB_OUTPUT
 
       - name: 删除旧工作流运行 (Delete old workflow runs)
         uses: Mattraks/delete-workflow-runs@v2.0.1
