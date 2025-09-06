@@ -8,7 +8,7 @@
 # <https://github.com/KFERMercer/OpenWrt-CI>
 #
 
-name: OpenWrt Build
+name: Build OpenWrt
 
 on:
   workflow_dispatch:
@@ -114,7 +114,6 @@ jobs:
           name: OpenWrt_firmware
           # 上传整个 targets 目录，包含所有固件文件
           path: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/
-          retention-days: 1 # 设置 artifact 的保留天数
 
       - name: 生成发布标签 (Generate release tag)
         id: tag
@@ -128,14 +127,20 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: 上传固件到发布版 (Upload firmware to release)
-        uses: softprops/action-gh-release@v1 # 更新到v1
+        uses: softprops/action-gh-release@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          # 修正文件路径，直接从编译输出目录中选取所有文件
-          files: ${{ env.OPENWRT_SOURCE_DIR }}/bin/targets/*/*/* # 匹配所有子目录下的所有文件
+          files: ${{ env.FIRMWARE }}/*
+          
+      - name: 上传到WeTransfer
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
+          echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+          echo "::set-output name=url::$(cat wetransfer.log | grep https | cut -f3 -d" ")"
 
       - name: 删除旧工作流运行 (Delete old workflow runs)
         uses: Mattraks/delete-workflow-runs@v2.0.1
