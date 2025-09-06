@@ -27,8 +27,8 @@ on:
         default: 'NX30Pro'
         type: choice
         options:
-          - XG1
           - NX30Pro
+          - XG1
 
 env:
   SELECTED_CONFIG: ${{ github.event.inputs.config_file }}
