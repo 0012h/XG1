@@ -54,8 +54,18 @@ jobs:
           
       - name: 克隆源代码
         run: |
-          git clone https://github.com/coolsnowwolf/lede
-          mv ./lede/* ./
+          git clone https://github.com/coolsnowwolf/lede openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          
+      - name: 加载自定义源
+        run: |
+          # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
+          # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
+          
+      - name: 更新软件源
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
           
       - name: 应用选择的配置文件
         run: |
@@ -71,37 +81,24 @@ jobs:
             echo "使用默认配置"
           fi
           
-      - name: 加载自定义源
-        run: |
-          # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
-          # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
-          
-      - name: 更新软件源
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          
       - name: 加载配置
         run: |
-          cat > /tmp/inline_script.sh << 'EOF'
+          cd openwrt
           # 1.修改默认ip
           sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-          # 2.修改主机名（根据选择）
-          sed -i "s/OpenWrt/$SELECTED_HOSTNAME/g" package/base-files/files/bin/config_generate
+          # 2.修改主机名
+          sed -i "s/OpenWrt/${{ github.event.inputs.hostname }}/g" package/base-files/files/bin/config_generate
           # 3.修改版本号
           sed -i "s/OpenWrt /0012h build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" package/lean/default-settings/files/zzz-default-settings
           # 4.修改默认主题
-          sed -i ' s/luci-theme-bootstrap/luci-theme-argon/g ' feeds/luci/collections/luci/Makefile
+          sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile
           # 5.设置ttyd免登录
-          # sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
-          EOF
-          # 执行嵌入的脚本
-          SELECTED_HOSTNAME="${{ env.SELECTED_HOSTNAME }}" bash /tmp/inline_script.sh
-          rm -f /tmp/inline_script.sh
-          make defconfig
+          sed -i 's/exit 0/exit 0\nsed -i "s/\\/bin\\/login/\\/bin\\/login -f root/" \/etc\/config\/ttyd/' package/lean/default-settings/files/zzz-default-settings
           
       - name: 下载依赖包
         run: |
+          cd openwrt
+          make defconfig
           make download -j8
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
@@ -114,8 +111,13 @@ jobs:
       - name : 上传编译目录
         uses: actions/upload-artifact@master
         with:
-          name: OpenWrt_firmware
-          path: bin/targets/
+          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: openwrt/bin
+          
+      - name: 整理文件
+        run: |
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
           
       - name: 生成发布标签
         id: tag
@@ -128,6 +130,13 @@ jobs:
           echo "Selected Hostname: ${{ env.SELECTED_HOSTNAME }}" >> release.txt
           [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ] && echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
+          
+      - name: 上传固件到WeTransfer
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
+          echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+          echo "::set-output name=url::$(cat wetransfer.log | grep https | cut -f3 -d" ")"
 
       - name: 上传固件到发布版
         uses: softprops/action-gh-release@master
