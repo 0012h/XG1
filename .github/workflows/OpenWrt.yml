@@ -57,6 +57,16 @@ jobs:
           git clone https://github.com/coolsnowwolf/lede
           mv ./lede/* ./
           
+      - name: 加载自定义源
+        run: |
+          # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
+          # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
+          
+      - name: 更新软件源
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
       - name: 应用选择的配置文件
         run: |
           if [[ "${{ env.SELECTED_CONFIG }}" != "默认配置" ]]; then
@@ -71,38 +81,22 @@ jobs:
             echo "使用默认配置"
           fi
           
-      - name: 加载自定义源
-        run: |
-          # echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
-          # echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
-          
-      - name: 更新软件源
-        run: |
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          
       - name: 加载配置
         run: |
-          cat > /tmp/inline_script.sh << 'EOF'
           # 1.修改默认ip
           sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-          # 2.修改主机名（根据选择）
+          # 2.修改主机名
           sed -i "s/OpenWrt/$SELECTED_HOSTNAME/g" package/base-files/files/bin/config_generate
           # 3.修改版本号
           sed -i "s/OpenWrt /0012h build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" package/lean/default-settings/files/zzz-default-settings
           # 4.修改默认主题
           sed -i ' s/luci-theme-bootstrap/luci-theme-argon/g ' feeds/luci/collections/luci/Makefile
           # 5.设置ttyd免登录
-          # sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
-          EOF
-          # 执行嵌入的脚本
-          SELECTED_HOSTNAME="${{ env.SELECTED_HOSTNAME }}" bash /tmp/inline_script.sh
-          rm -f /tmp/inline_script.sh
-          make defconfig
-          
+          sed -i 's/exit 0/exit 0\nsed -i "s/\\/bin\\/login/\\/bin\\/login -f root/" \/etc\/config\/ttyd/' package/lean/default-settings/files/zzz-default-settings
+
       - name: 下载依赖包
         run: |
+          make defconfig
           make download -j8
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
@@ -114,10 +108,13 @@ jobs:
           
       - name : 上传编译目录
         uses: actions/upload-artifact@master
+        run: |
+          cd lede/bin/targets/*/*
+          rm -rf packages
         with:
           name: OpenWrt_firmware
           path: bin/targets/
-          
+
       - name: 生成发布标签
         id: tag
         run: |
