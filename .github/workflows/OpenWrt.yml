@@ -13,20 +13,26 @@ name: OpenWrt
 on:
   workflow_dispatch:
     inputs:
-      use_custom_config:
-        description: '使用自定义.config文件'
-        required: false
-        default: false
-        type: boolean
-      custom_hostname:
-        description: '自定义主机名'
-        required: false
+      config_file:
+        description: '选择.config配置文件'
+        required: true
+        default: 'H3C.config'
+        type: choice
+        options:
+          - H3C.config
+          - XG1.config
+      hostname:
+        description: '选择主机名'
+        required: true
         default: 'NX30Pro'
-        type: string
+        type: choice
+        options:
+          - XG1
+          - NX30Pro
 
 env:
-  USE_CUSTOM_CONFIG: ${{ github.event.inputs.use_custom_config }}
-  CUSTOM_HOSTNAME: ${{ github.event.inputs.custom_hostname }}
+  SELECTED_CONFIG: ${{ github.event.inputs.config_file }}
+  SELECTED_HOSTNAME: ${{ github.event.inputs.hostname }}
 
 jobs:
   build:
@@ -49,13 +55,21 @@ jobs:
       - name: 克隆源代码
         run: |
           git clone https://github.com/coolsnowwolf/lede
-          if [[ "${{ env.USE_CUSTOM_CONFIG }}" == "true" && -f ".config" ]]; then
-            echo "使用自定义.config文件"
-            cp .config ./lede/.config
+          mv ./lede/* ./
+          
+      - name: 应用选择的配置文件
+        run: |
+          if [[ "${{ env.SELECTED_CONFIG }}" != "默认配置" ]]; then
+            echo "使用配置文件: ${{ env.SELECTED_CONFIG }}"
+            if [[ -f "configs/${{ env.SELECTED_CONFIG }}" ]]; then
+              cp "configs/${{ env.SELECTED_CONFIG }}" .config
+              echo "已应用配置文件: configs/${{ env.SELECTED_CONFIG }}"
+            else
+              echo "警告: 配置文件 configs/${{ env.SELECTED_CONFIG }} 不存在，使用默认配置"
+            fi
           else
             echo "使用默认配置"
           fi
-          mv ./lede/* ./
           
       - name: 加载自定义源
         run: |
@@ -72,10 +86,8 @@ jobs:
           cat > /tmp/inline_script.sh << 'EOF'
           # 1.修改默认ip
           sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-          # 2.修改主机名（可选）
-          if [[ -n "$CUSTOM_HOSTNAME" && "$CUSTOM_HOSTNAME" != "OpenWrt" ]]; then
-            sed -i "s/OpenWrt/$CUSTOM_HOSTNAME/g" package/base-files/files/bin/config_generate
-          fi
+          # 2.修改主机名（根据选择）
+          sed -i "s/OpenWrt/$SELECTED_HOSTNAME/g" package/base-files/files/bin/config_generate
           # 3.修改版本号
           sed -i "s/OpenWrt /0012h build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" package/lean/default-settings/files/zzz-default-settings
           # 4.修改默认主题
@@ -84,7 +96,7 @@ jobs:
           # sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd
           EOF
           # 执行嵌入的脚本
-          CUSTOM_HOSTNAME="${{ env.CUSTOM_HOSTNAME }}" bash /tmp/inline_script.sh
+          SELECTED_HOSTNAME="${{ env.SELECTED_HOSTNAME }}" bash /tmp/inline_script.sh
           rm -f /tmp/inline_script.sh
           make defconfig
           
@@ -109,11 +121,11 @@ jobs:
         id: tag
         run: |
           echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-          echo "OpenWrt Firmware for C-Life XG1" > release.txt
+          echo "OpenWrt Firmware" > release.txt
           echo "" >> release.txt
           echo "Build Date: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
-          echo "Custom Hostname: ${{ env.CUSTOM_HOSTNAME }}" >> release.txt
-          echo "Use Custom Config: ${{ env.USE_CUSTOM_CONFIG }}" >> release.txt
+          echo "Selected Config: ${{ env.SELECTED_CONFIG }}" >> release.txt
+          echo "Selected Hostname: ${{ env.SELECTED_HOSTNAME }}" >> release.txt
           [ -n "${{ steps.wetransfer.outputs.wetransfer_url }}" ] && echo "WeTransfer Link: ${{ steps.wetransfer.outputs.wetransfer_url }}" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
